@@ -11,79 +11,72 @@
       url = "github:inscapist/bundix/main";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    fu.url = "github:numtide/flake-utils";
+    flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "nixpkgs";
+    pre-commit-hooks-nix.url = "github:cachix/pre-commit-hooks.nix";
     ruby-nix.url = "github:inscapist/ruby-nix";
+    systems.url = "github:nix-systems/default";
   };
 
   outputs =
-    {
-      nixpkgs,
-      ruby-nix,
-      bundix,
-      bob-ruby,
-      fu,
-      self,
-    }:
-    with fu.lib;
-    eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ bob-ruby.overlays.default ];
-        };
-        rubyNix = ruby-nix.lib pkgs;
-
-        # TODO generate gemset.nix with bundix
-        gemset = import ./gemset.nix;
-
-        # If you want to override gem build config, see
-        #   https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/ruby-modules/gem-config/default.nix
-        gemConfig = { };
-
-        # See available versions here: https://github.com/bobvanderlinden/nixpkgs-ruby/blob/master/ruby/versions.json
-        ruby = pkgs."ruby-3.1.2";
-
-        # Running bundix would regenerate `gemset.nix`
-        bundixcli = bundix.packages.${system}.default;
-
-        # Use these instead of the original `bundle <mutate>` commands
-        bundleLock = pkgs.writeShellScriptBin "bundle-lock" ''
-          export BUNDLE_PATH=vendor/bundle
-          bundle lock
-        '';
-        bundleUpdate = pkgs.writeShellScriptBin "bundle-update" ''
-          export BUNDLE_PATH=vendor/bundle
-          bundle lock --update
-        '';
-      in
-      rec {
-        inherit
-          (rubyNix {
-            inherit gemset ruby;
-            name = "my-rails-app";
-            gemConfig = pkgs.defaultGemConfig // gemConfig;
-          })
-          env
-          ;
-
-        devShells = {
-          default = pkgs.mkShell {
-            packages =
-              [
+    inputs:
+    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = import inputs.systems;
+      imports = [
+        inputs.pre-commit-hooks-nix.flakeModule
+      ];
+      perSystem =
+        {
+          lib,
+          pkgs,
+          system,
+          ...
+        }:
+        {
+          _module.args.pkgs = lib.mkForce (
+            import inputs.nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+              overlays = [
+                inputs.bob-ruby.overlays.default
+              ];
+            }
+          );
+          devShells.default =
+            let
+              rubyNix = inputs.ruby-nix.lib pkgs;
+              gemset = import ./gemset.nix;
+              gemConfig = { };
+              ruby = pkgs."ruby-3.1.2";
+              bundixcli = inputs.bundix.packages.${system}.default;
+              bundleLock = pkgs.writeShellScriptBin "bundle-lock" ''
+                export BUNDLE_PATH=vendor/bundle
+                bundle lock
+              '';
+              bundleUpdate = pkgs.writeShellScriptBin "bundle-update" ''
+                export BUNDLE_PATH=vendor/bundle
+                bundle lock --update
+              '';
+              inherit
+                (rubyNix {
+                  inherit gemset ruby;
+                  name = "basic-rails-app";
+                  gemConfig = pkgs.defaultGemConfig // gemConfig;
+                })
                 env
-                bundixcli
-                bundleLock
-                bundleUpdate
-              ]
-              ++ (with pkgs; [
-                yarn
-                rufo
-                nodejs
-              ]);
-          };
+                ;
+            in
+            pkgs.mkShell {
+              packages = builtins.attrValues {
+                inherit
+                  env
+                  bundixcli
+                  bundleLock
+                  bundleUpdate
+                  ;
+                inherit (pkgs) nodejs yarn rufo;
+              };
+            };
         };
-      }
-    );
+    };
 }
